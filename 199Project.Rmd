@@ -1,0 +1,581 @@
+---
+title: "199Project"
+author: "Meiyu Li"
+date: "1/31/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(tree)
+library(dplyr)
+library(class)
+library(rpart)
+library(maptree)
+library(ROCR)
+library(moments)
+library(kableExtra)
+library(MASS)
+library(knitr)
+library(kableExtra)
+library(leaflet)
+library(dendextend)
+library(glmnet)
+library(scales)
+
+library(sp)
+library(gbm)
+library(randomForest)
+library(e1071)
+library(psych)
+
+#load packages and csv file
+library(knitr)
+library(ggplot2)
+library(dplyr)
+library(RColorBrewer)
+library(rworldmap)
+library(ggthemes)
+```
+```{r}
+
+#library(rgdal)
+#library(ggfortify)
+library(reshape2)
+library(gridExtra)
+library(lubridate)
+#library(caret)
+library(psych)
+library(reshape2)
+library(doMC)
+registerDoMC(2)
+```
+
+```{r}
+house <- read_csv("new.csv")
+```
+
+```{r}
+house <- subset(house, select=c(-url, -floor))
+```
+
+```{r}
+glimpse(house)
+```
+```{r}
+count<-0
+for (i in seq(1,24)){
+  if(sum(is.na(house[i,]))>0){
+    count=count+1
+  }
+}
+
+
+colSums(is.na(house))
+```
+
+```{r}
+100*(157977/318851) #percent of missing values in DOM
+100*(463/318851) #percent of missing values in CommunityAverage
+100*(2021/318851) #percent of missing values in buildingType
+```
+
+```{r}
+#delete the column DOM, 49.54571% are missing values
+house <- subset(house, select=c(-DOM))
+```
+
+```{r}
+#assign missing values in building type as unknown
+house <- house %>%
+   mutate(buildingType = ifelse(is.na(buildingType), "unknown", buildingType))
+```
+
+```{r}
+#id is not meaningful
+house <- subset(house, select=c(-id))
+```
+
+```{r}
+#check again
+count<-0
+for (i in seq(1,22)){
+  if(sum(is.na(house[i,]))>0){
+    count=count+1
+  }
+}
+
+
+colSums(is.na(house))
+```
+```{r}
+house <- na.omit(house)
+```
+
+```{r}
+#check again, missing values are removed or replaced
+count<-0
+for (i in seq(1,22)){
+  if(sum(is.na(house[i,]))>0){
+    count=count+1
+  }
+}
+
+
+colSums(is.na(house))
+```
+
+
+
+```{r}
+#assign a new column to identify the id
+house$ID <- seq(1, 318356)
+```
+
+
+```{r}
+house_time <- data.frame(date = house$tradeTime,
+                 year = as.numeric(format(house$tradeTime, format = "%Y")),
+                 month = as.numeric(format(house$tradeTime, format = "%m")),
+                 day = as.numeric(format(house$tradeTime, format = "%d")))
+```
+
+```{r}
+house$year <- house_time$year
+house$month <- house_time$month
+house$day <- house_time$day
+```
+
+```{r}
+glimpse(house)
+```
+
+```{r}
+house_byYear <- house %>% group_by(year) %>% summarise_at(vars(price), list(pricePerSquare = mean))
+house_byYear <- house_byYear[-c(1,2),]
+house_byYear$Place <- c("Beijing", "Beijing", "Beijing", "Beijing", "Beijing", "Beijing", "Beijing", "Beijing", "Beijing", "Beijing", "Beijing")
+
+house_byYear <- house_byYear %>% add_row(year=2008:2018, pricePerSquare=c(40315.29, 39620, 39272, 34754, 36144, 28846, 36144, 38230 ,40315 ,41357 ,43790), Place=c("Los Angeles", "Los Angeles", "Los Angeles", "Los Angeles", "Los Angeles", "Los Angeles", "Los Angeles", "Los Angeles", "Los Angeles", "Los Angeles", "Los Angeles"))
+```
+
+
+
+```{r}
+ggplot(house_byYear, aes(x=year,y=pricePerSquare, colour=Place)) + ggtitle("Average Price Per Square Meters from 2008 to 2018") +geom_smooth() + labs(x="Year", y="Price Per Square Meters in CNY") + xlim(2009, 2018)
+```
+
+
+```{r}
+quantile(house$price)
+```
+
+
+```{r}
+x=seq(1,318356)
+for (i in seq(1,318356)){
+  if(1<= house[i, "price"] & house[i, "price"] < 28048.75){
+    x[i] = "0-25%"
+  }
+  else if(28048.75<= house[i, "price"] & house[i, "price"] < 38726.00){
+    x[i] = "25%-50%"
+  }
+  else if(38726.00<= house[i, "price"] & house[i, "price"] < 53788.00){
+    x[i] = "50%-75%"
+  }
+  else if(53788.00<= house[i, "price"] & house[i, "price"] <= 156250.00){
+    x[i] = "75%-100%"
+  }
+}
+
+```
+
+
+```{r}
+house2 <- house
+house2$priceRange <- x
+```
+
+```{r}
+ggplot(house2, aes(x=Lng, y=Lat, colour=priceRange)) + geom_point() + labs(x="Longitude", y='Latitude', colour='Price Range') + ggtitle("Housing Price Distribution in Beijing")
+```
+
+```{r}
+house_cor <- subset(house, select=c(-buildingType, -constructionTime, -tradeTime,-ID))
+cormat <- round(cor(house_cor),2)
+library(reshape2)
+melted_cormat <- melt(cormat)
+ggplot(data = melted_cormat, aes(x=Var1, y=Var2, fill=value)) + geom_tile() + theme(axis.text.x = element_text(angle = 90))
+```
+
+
+```{r}
+# Get lower triangle of the correlation matrix
+  get_lower_tri<-function(cormat){
+    cormat[upper.tri(cormat)] <- NA
+    return(cormat)
+  }
+  # Get upper triangle of the correlation matrix
+  get_upper_tri <- function(cormat){
+    cormat[lower.tri(cormat)]<- NA
+    return(cormat)
+  }
+  
+upper_tri <- get_upper_tri(cormat)
+upper_tri
+
+melted_cormat <- melt(upper_tri, na.rm = TRUE)
+
+ggplot(data = melted_cormat, aes(Var2, Var1, fill = value))+
+ geom_tile(color = "white")+
+ scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+   midpoint = 0, limit = c(-1,1), space = "Lab", 
+   name="Pearson\nCorrelation") +
+  theme_minimal()+ 
+ theme(axis.text.x = element_text(angle = 45, vjust = 1, 
+    size = 12, hjust = 1))+
+ coord_fixed()+
+  theme(axis.text.x = element_text(angle = 90))
+```
+
+```{r}
+house_byDistrict <- house %>% group_by(district) %>% summarise_at(vars(price), list(pricePerSquare = mean))  
+house_byDistrict$District <- c("DongCheng", "FengTai", "TongZhou", "DaXing", "Fangshan", "ChangPing", "ZhaoYang", "HaiDian", "ShiJingShan", "XiCheng", "PingGu", "MenTouGou", "ShunYi")
+```
+
+```{r}
+ggplot(house_byDistrict[2:3], aes(x=District,y=pricePerSquare)) + ggtitle("Average Price Per Square in Different Districts") + geom_bar(stat="identity") + labs(x="Districts", y="Price Per Square Meter in CNY")
+
+
+  
+```
+
+
+```{r}
+summary(house)
+```
+
+```{r}
+df3 <- house
+df3$buildingType <- as.factor(df3$buildingType)
+df3$buildingStructure <- as.factor(df3$buildingStructure)
+df3$elevator <- as.factor(df3$elevator)
+df3$fiveYearsProperty <- as.factor(df3$fiveYearsProperty)
+df3$subway <- as.factor(df3$subway)
+df3$district <- as.factor(df3$district)
+df3$renovationCondition <- as.factor(df3$renovationCondition)
+
+str(df3)
+
+makeFeatureCatEDA <- function(x, numFeatures){
+  if(numFeatures < 13){
+    
+    mypalette <-'Paired'
+    mycols <- 2
+    
+    mymap <- df3 %>% ggplot(aes(Lng,Lat)) + geom_point(aes_string(color=x),size=.5,alpha=.25) + 
+      scale_colour_brewer(name='',palette=mypalette) + theme_minimal() +
+      facet_wrap(as.formula(paste("~", x)),ncol=mycols) + 
+      theme(axis.title= element_blank(), 
+            axis.text =element_blank(), legend.position='None') + 
+      labs(title=paste0('geolocation of homes \ndepending on the ',x,' feature')) + coord_fixed(1.3)
+    
+    mybox <- df3 %>% ggplot(aes_string(x,'price')) + geom_boxplot(aes_string(color=x)) + 
+      scale_color_brewer(name='', palette=mypalette) + theme_minimal(12) + 
+      theme(axis.title =element_blank(), legend.position='None') + 
+      labs(title='average price of homes') + coord_flip()
+  }
+  else{
+    
+    mypalette <- colorRampPalette(brewer.pal(12,'Paired'))(numFeatures)
+    mycols <- 3
+    
+    mymap <- df3 %>% ggplot(aes(Lng,Lat)) + geom_point(aes_string(color=x),size=.5,alpha=.25) + 
+      scale_colour_manual(name='',values = mypalette) + theme_minimal() +
+    facet_wrap(as.formula(paste("~", x)),ncol=mycols) + 
+    theme(axis.title= element_blank(), 
+          axis.text =element_blank(), 
+          legend.position='None') + 
+    labs(title=paste0('geolocation of homes depending on the ',x,' feature'))
+    
+    mybox <- df3 %>% ggplot(aes_string(x,'price')) + geom_boxplot(aes_string(color=x)) + 
+      scale_color_manual(name='',values=mypalette) + theme_minimal(12) + 
+      theme(axis.title =element_blank(), legend.position='None') + 
+      labs(title='average price of homes') + coord_flip()
+  }
+  
+  grid.arrange(mybox, mymap,ncol=2)
+}
+```
+
+```{r}
+makeFeatureCatEDA('district', 13)
+```
+```{r}
+glimpse(house)
+```
+```{r}
+house_geo = house
+center_long = 116.4
+center_lat = 39.9
+distance=seq(1, 318356)
+for (i in seq(1, 318356)){
+    p = pi/180
+    a = 0.5 - cos((house_geo[i, "Lat"]-center_lat)*p)/2 + cos(center_lat*p) * cos(house_geo[i, "Lat"]*p) * (1-cos((house_geo[i, "Lng"]-center_long)*p))/2
+    distance[i] = 12742 * asin(sqrt(a))
+}
+```
+```{r}
+center_lat = rep(39.9, times = 318356)
+center_lat = rep(116.4, times = 318356)
+house2[,"Lat"]+center_lat
+```
+```{r}
+#add the distance from the center (km)
+center_lat = rep(39.9, times = 318356)
+center_Lng = rep(116.4, times = 318356)
+p = pi/180
+a = 0.5 - cos((house2[,"Lat"]-center_lat)*p)/2 + cos(center_lat*p) * cos(house2[,"Lat"]*p) * (1-cos((house2[,"Lng"]-center_Lng)*p))/2
+dis <- 12742 * asin(sqrt(a))
+house_geo = house2
+house_geo["distance"]=dis
+summary(house_geo["distance"])
+```
+Prediction Models
+
+```{r}
+
+house2 = subset(house_geo, select=c(-Lat,-Lng))
+house2$elevator = as.character(house2$elevator)
+house2$buildingStructure = as.character(house2$buildingStructure)
+house2$subway = as.character(house2$subway)
+house2$renovationCondition = as.character(house2$renovationCondition)
+house2$fiveYearsProperty = as.character(house2$fiveYearsProperty)
+summary(house2)
+```
+```{r}
+#traning and test set for prediction model
+set.seed(99) 
+n <- nrow(house2)
+in.trn2 <- sample.int(n, 0.8*n) 
+trn2 <- house2[ in.trn2,]
+tst2 <- house2[-in.trn2,]
+```
+
+
+p-value>0.05 then significant
+```{r}
+#four plots
+linear1 <- lm(price ~followers + square + livingRoom + drawingRoom + kitchen + bathRoom + buildingStructure + buildingType +renovationCondition + ladderRatio + elevator + fiveYearsProperty + subway + communityAverage + year + month +day+distance, data=trn2)
+summary(linear1)
+layout(matrix(c(1,2,3,4),2,2)) # optional 4 graphs/page
+plot(linear1)
+```
+
+```{r}
+#AIC
+library(MASS)
+step <- stepAIC(linear1, direction="both")
+step$anova
+```
+
+```{r}
+# Coeff and Anova table, we do not need to do regularization since we do not have large coeff
+coefficients(linear1)
+confint(linear1, level=0.95)
+anova(linear1)
+```
+```{r}
+# create the evaluation metrics function
+eval_metrics = function(model, df, predictions, target){
+    resids = df[,target] - predictions
+    resids2 = resids**2
+    N = length(predictions)
+    r2 = as.character(round(summary(model)$r.squared, 2))
+    adj_r2 = as.character(round(summary(model)$adj.r.squared, 2))
+    print(adj_r2) #Adjusted R-squared
+    print(as.character(round(sqrt(sum(resids2)/N), 2))) #RMSE
+}
+
+# Step 2 - predicting and evaluating the model on train data
+predictions = predict(linear1, newdata = trn2)
+eval_metrics(linear1, trn2, predictions, target = 'price')
+
+# Step 3 - predicting and evaluating the model on test data
+predictions = predict(linear1, newdata = tst2)
+eval_metrics(linear1, tst2, predictions, target = 'price')
+
+```
+
+
+
+```{r}
+#Ridge regression
+library(glmnet)
+
+x = model.matrix( ~ followers + square + livingRoom + drawingRoom + kitchen + bathRoom + buildingStructure + buildingType +renovationCondition + ladderRatio + elevator + fiveYearsProperty + subway + communityAverage + year + month +day +distance- 1, trn2)
+y_train = trn2$price
+
+x_test = model.matrix( ~ followers + square + livingRoom + drawingRoom + kitchen + bathRoom + buildingStructure + buildingType +renovationCondition + ladderRatio + elevator + fiveYearsProperty + subway + communityAverage + year + month +day+distance - 1, tst2)
+y_test = tst2$price
+
+lambdas <- 10^seq(2, -3, by = -.1)
+ridge_reg = cv.glmnet(x, y_train, nlambda = 25, alpha = 0, family = 'gaussian', lambda = lambdas)
+
+summary(ridge_reg)
+```
+```{r}
+as.matrix(coefficients(ridge_reg))
+```
+```{r}
+#finding the optimal lambda value
+cv_ridge <- cv.glmnet(x, y_train, alpha = 0, lambda = lambdas)
+optimal_lambda <- cv_ridge$lambda.min
+optimal_lambda
+```
+```{r}
+# Compute R^2 from true and predicted values
+eval_results <- function(true, predicted, df) {
+  SSE <- sum((predicted - true)^2)
+  SST <- sum((true - mean(true))^2)
+  R_square <- 1 - SSE / SST
+  RMSE = sqrt(SSE/nrow(df))
+
+  
+  # Model performance metrics
+data.frame(
+  RMSE = RMSE,
+  Rsquare = R_square
+)
+  
+}
+
+# Prediction and evaluation on train data
+predictions_train <- predict(ridge_reg, s = optimal_lambda, newx = x)
+eval_results(y_train, predictions_train, trn2)
+
+# Prediction and evaluation on test data
+predictions_test <- predict(ridge_reg, s = optimal_lambda, newx = x_test)
+eval_results(y_test, predictions_test, tst2)
+```
+
+```{r}
+lambdas <- 10^seq(2, -3, by = -.1)
+
+# Setting alpha = 1 implements lasso regression
+lasso_reg <- cv.glmnet(x, y_train, alpha = 1, lambda = lambdas, standardize = TRUE, nfolds = 5)
+
+# Best 
+lambda_best <- lasso_reg$lambda.min 
+lambda_best
+```
+
+```{r}
+lasso_model <- glmnet(x, y_train, alpha = 1, lambda = lambda_best, standardize = TRUE)
+
+predictions_train <- predict(lasso_model, s = lambda_best, newx = x)
+eval_results(y_train, predictions_train, trn2)
+
+predictions_test <- predict(lasso_model, s = lambda_best, newx = x_test)
+eval_results(y_test, predictions_test, tst2)
+```
+```{r}
+anova(ridge_reg)
+```
+
+```{r}
+anova(lasso_model)
+```
+
+```{r}
+boxplot(house$price)
+median(house$price)
+```
+
+```{r}
+#Classification
+house3 <- house2 %>% mutate(priceRange=as.factor(ifelse(price > median(price), 1, 0)))
+
+set.seed(10) 
+n <- nrow(house3)
+in.trn <- sample.int(n, 0.8*n) 
+trn <- house3[ in.trn,]
+tst <- house3[-in.trn,]
+```
+
+
+
+
+```{r}
+logit_reg <- glm(priceRange~followers + square + livingRoom + drawingRoom + kitchen + bathRoom + buildingStructure + buildingType +renovationCondition + ladderRatio + elevator + fiveYearsProperty + subway + communityAverage + year + month +day, data=trn, family=binomial)
+summary(logit_reg)
+```
+```{r}
+recordsHouse = matrix(NA, nrow=2, ncol=2)
+colnames(recordsHouse) = c("train.error","test.error")
+rownames(recordsHouse) = c("logistic","lasso")
+```
+
+```{r}
+set.seed(1)
+logit_trn <- predict(logit_reg, trn %>% dplyr::select(-priceRange), type="response")
+logit_tst <- predict(logit_reg, tst %>% dplyr::select(-priceRange), type="response")
+
+logit_trn_er = ifelse(logit_trn>=0.5, 1, 0) %>% 
+  as.factor %>% calc_error_rate(droplevels(trn$priceRange))
+logit_tst_er = ifelse(logit_tst>=0.5, 1, 0) %>% 
+  as.factor %>% calc_error_rate(droplevels(tst$priceRange))
+
+
+recordsHouse["logistic",]=cbind(logit_trn_er, logit_tst_er)
+recordsHouse
+```
+
+```{r}
+set.seed(666)
+lambdas = c(1, 5, 10, 50) * 1e-4
+
+x_train = model.matrix( ~ followers + square + livingRoom + drawingRoom + kitchen + bathRoom + buildingStructure + buildingType +renovationCondition + ladderRatio + elevator + fiveYearsProperty + subway + communityAverage + year + month +day - 1, trn)
+y_train = droplevels(trn$priceRange)
+
+logit_lasso <- cv.glmnet(x_train, y_train, family="binomial", alpha = 1, lambda = lambdas, nfolds = nfold)
+
+position=min(which(logit_lasso$cvm==min(logit_lasso$cvm)))
+
+lambda_best = logit_lasso$lambda[position]
+lambda_best
+```
+
+```{r}
+coeff_train = predict(logit_lasso, type="coefficients", s=lambda_best, newx = trn)
+coeff_train
+```
+
+```{r}
+set.seed(1)
+#calculate training and test error
+pred_train=predict(logit_lasso, s=lambda_best, newx=x_train, type="class") 
+lasso_trn_er=calc_error_rate(pred_train, y_train)
+
+
+x_test = model.matrix( ~ followers + square + livingRoom + drawingRoom + kitchen + bathRoom + buildingStructure + buildingType +renovationCondition + ladderRatio + elevator + fiveYearsProperty + subway + communityAverage + year + month +day - 1, tst)
+y_test = droplevels(tst$priceRange)
+
+pred_test=predict(logit_lasso, s=lambda_best, newx=x_test, type="class") 
+lasso_tst_er=calc_error_rate(pred_test, y_test)
+
+
+recordsHouse["lasso",]=cbind(lasso_trn_er, lasso_tst_er)
+recordsHouse
+
+```
+
+```{r}
+rownames(coef(logit_lasso, s = 'lambda.1se'))[coef(logit_lasso, s = 'lambda.1se')[,1]!= 0] 
+coef(logit_reg, s = 'lambda.1se')
+```
+
+
+
+
+
